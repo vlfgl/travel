@@ -118,7 +118,7 @@ def save_results(date, results):
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ 결과 저장 완료: {filename}")
+    print(f"\t ✅ 결과 저장 완료: {filename}")
 
 def validate_schema(data):
     """Gemini 응답이 필수 스키마를 지키는지 검증"""
@@ -230,7 +230,7 @@ def save_report(report, date):
     filename = f"travel_report_{date}.md"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(report)
-    print(f"✅ 리포트 저장 완료: {filename}")
+    print(f"\t ✅ 리포트 저장 완료: {filename}")
     
 # 6. 메인 실행 흐름
 def main():
@@ -252,12 +252,11 @@ def main():
 
     try:
         # 1) Gemini 추천
-        print("🤖 Gemini에게 여행지 추천받는 중...")
+        print("[1/3] 🤖 Gemini에게 여행지 추천받는 중...")
         gemini_result = get_travel_recommendation(date)
 
         # 2) 스키마 검증 ← 요구사항 필수!
         validate_schema(gemini_result)
-        print("✅ 스키마 검증 통과!")
 
         # 원본 응답 저장
         results["recommended_city"] = gemini_result["recommended_city"]
@@ -267,9 +266,17 @@ def main():
 
         # 3) 추천 도시 맛집 검색
         city = gemini_result["recommended_city"]
-        print(f"🍴 '{city}' 맛집 검색 중...")
+        print(f"[2/3] 🍴 '{city}' 맛집 검색 중...")
         try:
-            results["restaurants"] = search_restaurants(city)
+            restaurants = search_restaurants(city + " 맛집")
+
+            # 검색 결과 0건 처리
+            if not restaurants:   # 빈 리스트면 True
+                print(f"   ℹ️  검색 결과 0건 → 재시도 없이 다음 단계로 진행")
+                results["errors"].append(f"[{city}] 맛집 검색 결과 0건")
+
+            results["restaurants"] = restaurants
+
         except Exception as e:
             error_msg = f"[{city}] 맛집 검색 실패: {e}"
             print(f"⚠️  {error_msg}")
@@ -286,7 +293,7 @@ def main():
 
     # 5) 최종 Markdown 리포트 생성 ← 추가!
     if gemini_result is not None:
-        print("\n📝 최종 리포트 생성 중...")
+        print("\n[3/3]📝 최종 리포트 생성 중...")
         report = generate_final_report(
             gemini_result,
             results.get("restaurants", []),
