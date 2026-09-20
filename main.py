@@ -76,6 +76,20 @@ def get_travel_recommendation(date):
             return json.loads(text)  # 성공하면 바로 반환
 
         except json.JSONDecodeError as e:
+            # JSON 형식 오류일 때 
+            print(f"   ⚠️ 응답 형식이 JSON이 아닙니다. (시도 {attempt+1}/2)")
+            last_error = f"JSON 파싱 에러: {e}"
+            continue
+
+        except Exception as e:
+            # 💡 [추가된 부분] API 키 오류(401, 403), 네트워크 오류 등을 여기서 잡습니다.
+            print(f"   ❌ Gemini API 호출 중 오류 발생!")
+            print(f"      상세 내용: {e}") # 여기서 401, 403 등의 원인이 출력됩니다.
+            
+            # API 키 문제나 권한 문제는 재시도해도 안 될 확률이 높으므로 바로 종료하거나 에러를 던집니다.
+            raise ValueError(f"Gemini API 통신 실패: {e}")
+
+
             last_error = e
             continue  # 다음 시도로
 
@@ -95,6 +109,12 @@ def search_restaurants(region):
     }
 
     response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code != 200:
+        print(f"❌ 카카오 API 오류 발생! (상태 코드: {response.status_code})")
+        print(f"📝 에러 내용: {response.json()}") # 서버가 보내준 구체적 이유 출력
+        return [] 
+    
     response.raise_for_status()  # 오류 시 예외 발생
 
     data = response.json()
@@ -227,9 +247,13 @@ def generate_final_report(recommendation, restaurants, date, errors):
 
 def save_report(report, date):
     """Markdown 리포트를 .md 파일로 저장"""
-    filename = f"travel_report_{date}.md"
+    # 1. results 폴더가 없으면 생성
+    os.makedirs("results", exist_ok=True)
+
+    filename = f"results/travel_report_{date}.md"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(report)
+
     print(f"\t ✅ 리포트 저장 완료: {filename}")
     
 # 6. 메인 실행 흐름
@@ -241,14 +265,32 @@ def main():
     args = parser.parse_args()
     date = args.date
 
-    print(f"🗓️  {date} 여행 정보를 준비하고 있어요...\n")
+    # --- [추가] 캐싱 로직 시작 ---
+    cache_path = f"results/travel_{date}.json"
+    
+    if os.path.exists(cache_path):
+        print(f"🗓️  {date}에 대한 기존 데이터가 존재합니다. 캐시 파일을 불러옵니다...")
+        with open(cache_path, "r", encoding="utf-8") as f:
+            results = json.load(f)
+        
+        # 리포트 생성을 위해 gemini_result 형식에 맞춰 데이터 복구
+        gemini_result = {
+            "recommended_city": results["recommended_city"],
+            "weather": results["weather"],
+            "events": results["events"],
+            "reason": results["reason"]
+        }
 
-    results = {
-        "date": date,
-        "errors": [],
-    }
 
-    gemini_result = None  # ← 리포트 생성 여부 판단용
+    else:
+        # 기존 API 호출 로직 (파일이 없을 때만 실행)
+        print(f"🗓️  {date} 여행 정보를 준비하고 있어요...\n")
+
+        results = {
+            "date": date,
+            "errors": [],
+        }
+        gemini_result = None
 
     try:
         # 1) Gemini 추천
@@ -274,7 +316,6 @@ def main():
             if not restaurants:   # 빈 리스트면 True
                 print(f"   ℹ️  검색 결과 0건 → 재시도 없이 다음 단계로 진행")
                 results["errors"].append(f"[{city}] 맛집 검색 결과 0건")
-
             results["restaurants"] = restaurants
 
         except Exception as e:
@@ -283,22 +324,22 @@ def main():
             results["errors"].append(error_msg)
             results["restaurants"] = []
 
+         # 4) JSON 결과 저장 (새로 생성했을 때만 저장)
+        save_results(date, results)
+
     except Exception as e:
         error_msg = f"처리 실패: {e}"
         print(f"❌ {error_msg}")
         results["errors"].append(error_msg)
 
-    # 4) JSON 결과 저장 (기존 그대로)
-    save_results(date, results)
-
-    # 5) 최종 Markdown 리포트 생성 ← 추가!
+     # 5) 최종 Markdown 리포트 생성 (캐시를 읽었든 새로 만들었든 실행)
     if gemini_result is not None:
         print("\n[3/3]📝 최종 리포트 생성 중...")
         report = generate_final_report(
             gemini_result,
             results.get("restaurants", []),
             date,
-            results["errors"],
+            results.get("errors", []),
         )
         save_report(report, date)
         print("\n" + report)  # 화면에도 출력
